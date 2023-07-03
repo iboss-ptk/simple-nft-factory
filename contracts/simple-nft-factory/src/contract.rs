@@ -1,3 +1,4 @@
+use cosmwasm_schema::cw_serde;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
@@ -21,9 +22,16 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CREATE_DENOM_REPLY_ID: u64 = 1;
 
 const DENOM: Item<String> = Item::new("denom");
-const PRICE: Item<Coin> = Item::new("price");
 const MINTER: Item<Addr> = Item::new("minter");
 const MINTER_ROYALTY: Item<Decimal> = Item::new("minter_royalty");
+
+#[cw_serde]
+pub struct Sell {
+    pub price: Coin,
+    pub seller: Addr,
+}
+
+const SELL: Item<Sell> = Item::new("sell");
 
 /// Handling contract instantiation
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -108,7 +116,13 @@ fn sell(deps: DepsMut, info: MessageInfo, price: Coin) -> Result<Response, Contr
     one_coin(&info)?;
     must_pay(&info, &DENOM.load(deps.storage)?)?; // this check is enough since this denom must only have amount 1
 
-    PRICE.save(deps.storage, &price)?;
+    SELL.save(
+        deps.storage,
+        &Sell {
+            price: price.clone(),
+            seller: info.sender.clone(),
+        },
+    )?;
 
     Ok(Response::new()
         .add_attribute("method", "sell")
@@ -117,11 +131,12 @@ fn sell(deps: DepsMut, info: MessageInfo, price: Coin) -> Result<Response, Contr
 }
 
 fn buy(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let price = PRICE.load(deps.storage)?;
+    let Sell { price, seller } = SELL.load(deps.storage)?;
     let minter_royalty = MINTER_ROYALTY.load(deps.storage)?;
     valid_price(&info, &price)?;
 
     let minter = MINTER.load(deps.storage)?;
+    let denom = DENOM.load(deps.storage)?;
 
     // giving minter_royalty to the original owner
     let to_minter_amount = price
@@ -134,19 +149,32 @@ fn buy(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
         .checked_sub(to_minter_amount)
         .map_err(StdError::overflow)?;
 
-    // remove price once the transaction has been completed
-    PRICE.remove(deps.storage);
+    deps.api
+        .debug(&format!("to_minter_amount: {}", to_minter_amount));
+    deps.api
+        .debug(&format!("to_seller_amount: {}", to_seller_amount));
+
+    deps.api.debug(&format!("minter: {}", minter));
+    deps.api.debug(&format!("seller: {}", seller));
+
+    // remove sell once the transaction has been completed
+    SELL.remove(deps.storage);
 
     Ok(Response::new()
         .add_attribute("method", "buy")
         .add_attribute("sender", info.sender.as_str())
         .add_attribute("price", price.to_string())
-        // send the paid price - minter_royalty to the seller
+        // send nft to the buyer
         .add_message(BankMsg::Send {
             to_address: info.sender.to_string(),
+            amount: vec![Coin::new(1, denom)],
+        })
+        // send the paid price - minter_royalty to the seller
+        .add_message(BankMsg::Send {
+            to_address: seller.to_string(),
             amount: vec![Coin::new(to_seller_amount.u128(), price.denom.clone())],
         })
-        // send the minter_royalty to the original owner
+        // send the minter_royalty to the minter
         .add_message(BankMsg::Send {
             to_address: minter.to_string(),
             amount: vec![Coin::new(to_minter_amount.u128(), price.denom)],
