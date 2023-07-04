@@ -149,14 +149,6 @@ fn buy(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
         .checked_sub(to_minter_amount)
         .map_err(StdError::overflow)?;
 
-    deps.api
-        .debug(&format!("to_minter_amount: {}", to_minter_amount));
-    deps.api
-        .debug(&format!("to_seller_amount: {}", to_seller_amount));
-
-    deps.api.debug(&format!("minter: {}", minter));
-    deps.api.debug(&format!("seller: {}", seller));
-
     // remove sell once the transaction has been completed
     SELL.remove(deps.storage);
 
